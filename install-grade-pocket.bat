@@ -18,6 +18,7 @@ if errorlevel 1 goto :failed
 
 echo.
 echo 安装完成。以后双击 start-grade-pocket.bat 即可运行。
+echo 如需后台自动登录，请再双击 setup-auto-login.bat。
 pause
 exit /b 0
 

@@ -37,8 +37,10 @@ function sendJson(request, response, statusCode, body) {
 
 async function getContext() {
   if (context) return context;
+  const savedCredentials = await readStoredCredentials();
+  const canRunSilently = Boolean(savedCredentials.username && savedCredentials.password);
   context = await webkit.launchPersistentContext(profileDirectory, {
-    headless: false,
+    headless: canRunSilently,
     viewport: { width: 1280, height: 860 },
     locale: "zh-CN",
     ignoreHTTPSErrors: true,
@@ -120,13 +122,36 @@ async function readKeychain(service) {
   }
 }
 
+async function readStoredCredentials() {
+  if (process.platform === "darwin") {
+    const [username, password] = await Promise.all([
+      readKeychain(USERNAME_SERVICE), readKeychain(PASSWORD_SERVICE),
+    ]);
+    return { username, password };
+  }
+  if (process.platform === "win32") {
+    try {
+      const script = path.join(here, "read-windows-credential.ps1");
+      const { stdout } = await execFileAsync("powershell.exe", [
+        "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", script,
+      ], { windowsHide: true, maxBuffer: 16_384 });
+      const credentials = JSON.parse(stdout.trim());
+      return {
+        username: String(credentials.username || ""),
+        password: String(credentials.password || ""),
+      };
+    } catch {
+      return { username: "", password: "" };
+    }
+  }
+  return { username: "", password: "" };
+}
+
 async function tryAutomaticLogin(page) {
   const usernameInput = page.locator('#userAccount, input[name="userAccount"]').first();
   const passwordInput = page.locator('#userPassword, input[name="userPassword"]').first();
   if (!await usernameInput.count() || !await passwordInput.count()) return false;
-  const [username, password] = await Promise.all([
-    readKeychain(USERNAME_SERVICE), readKeychain(PASSWORD_SERVICE),
-  ]);
+  const { username, password } = await readStoredCredentials();
   if (!username || !password) return false;
 
   return (await loginWithCredentials(page, username, password)).ok;
@@ -238,7 +263,7 @@ async function syncGrades() {
   if (!queryFrame || await looksLoggedOut(page)) {
     if (page.url() === "about:blank") await page.goto(MAIN_URL, { waitUntil: "domcontentloaded" }).catch(() => {});
     await page.bringToFront();
-    return { status: "login_required", message: "尚未设置自动登录，或账号信息已失效。请运行一次“自动登录设置”，也可以在已打开的窗口手动登录。" };
+    return { status: "login_required", message: "尚未设置自动登录，或账号信息已失效。请运行当前系统的“自动登录设置”，也可以在已打开的窗口手动登录。" };
   }
 
   return readAllGrades(page, queryFrame);

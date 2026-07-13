@@ -486,7 +486,7 @@ export default function Home() {
             <span className="modal-icon">⇄</span>
             <p className="eyebrow">山东财经大学 · 本机连接</p>
             <h2 id="connect-title">一键检查新成绩</h2>
-            <p className="modal-copy">连接器只在你的电脑上运行。第一次使用或登录过期时会打开独立登录窗口；它保存登录会话，不保存明文密码。</p>
+            <p className="modal-copy">连接器只在你的电脑上运行。启用系统凭据自动登录后，刷新会在后台完成，不再弹出教务窗口；未设置自动登录时才会显示登录窗口。</p>
             <button className="primary-button full refresh-modal-button" type="button" onClick={refreshGrades} disabled={syncing}>{syncing ? "正在连接…" : "↻ 立即刷新全部成绩"}</button>
             <p className="fallback-title">Safari 备用同步</p>
             <ol className="sync-steps">
