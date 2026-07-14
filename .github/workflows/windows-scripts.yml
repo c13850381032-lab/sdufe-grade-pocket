@@ -5,12 +5,18 @@ on:
     paths:
       - "**/*.bat"
       - "**/*.ps1"
+      - "package.json"
+      - "package-lock.json"
+      - "vite.config.ts"
       - ".gitattributes"
       - ".github/workflows/windows-scripts.yml"
   pull_request:
     paths:
       - "**/*.bat"
       - "**/*.ps1"
+      - "package.json"
+      - "package-lock.json"
+      - "vite.config.ts"
       - ".gitattributes"
       - ".github/workflows/windows-scripts.yml"
 
@@ -19,6 +25,19 @@ jobs:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        shell: cmd
+        run: npm.cmd ci --no-audit --no-fund
+
+      - name: Build web app on Windows
+        shell: cmd
+        run: npm.cmd run build
 
       - name: Check ASCII and CRLF
         shell: powershell
