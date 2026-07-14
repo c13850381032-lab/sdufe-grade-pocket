@@ -2,10 +2,10 @@ $ErrorActionPreference = "Stop"
 $projectDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $launcher = Join-Path $projectDir "launch-grade-pocket-background-windows.ps1"
 $desktop = [Environment]::GetFolderPath("Desktop")
-$shortcutName = (-join ([char[]](0x6210, 0x7EE9, 0x888B))) + ".lnk"
-$shortcutPath = Join-Path $desktop $shortcutName
+$shortcutPath = Join-Path $desktop "Grade Pocket.lnk"
 $powershell = Join-Path $PSHOME "powershell.exe"
 
+New-Item -ItemType Directory -Force -Path $desktop | Out-Null
 $shell = New-Object -ComObject WScript.Shell
 $shortcut = $shell.CreateShortcut($shortcutPath)
 $shortcut.TargetPath = $powershell
