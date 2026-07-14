@@ -245,6 +245,14 @@ async function parseGradeTable(listFrame) {
 }
 
 async function syncGrades() {
+  // Stored credentials should always use a fresh browser context. Reusing the
+  // persistent manual-login profile can leave expired cookies or a stale SSO
+  // redirect in place even when the saved username and password are valid.
+  const savedCredentials = await readStoredCredentials();
+  if (savedCredentials.username && savedCredentials.password) {
+    return syncGuestGrades(savedCredentials.username, savedCredentials.password);
+  }
+
   const browserContext = await getContext();
   let page = browserContext.pages()[0];
   if (!page) page = await browserContext.newPage();
