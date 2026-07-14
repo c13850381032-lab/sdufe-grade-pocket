@@ -15,9 +15,11 @@ call npm install
 if errorlevel 1 goto :failed
 call npx playwright install webkit
 if errorlevel 1 goto :failed
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%~dp0create-desktop-shortcut-windows.ps1"
+if errorlevel 1 goto :failed
 
 echo.
-echo 安装完成。以后双击 start-grade-pocket.bat 即可运行。
+echo 安装完成。桌面上已经创建“成绩袋”快捷方式，以后双击它即可运行。
 echo 如需后台自动登录，请再双击 setup-auto-login.bat。
 pause
 exit /b 0

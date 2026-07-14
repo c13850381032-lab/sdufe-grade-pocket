@@ -43,6 +43,7 @@ next-env.d.ts
 /.npm-cache/
 /node_modules.partial/
 /connector/profile/
+/.runtime/
 *.db
 *.db-shm
 *.db-wal
