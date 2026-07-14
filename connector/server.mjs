@@ -150,11 +150,15 @@ async function readStoredCredentials() {
 async function tryAutomaticLogin(page) {
   const usernameInput = page.locator('#userAccount, input[name="userAccount"]').first();
   const passwordInput = page.locator('#userPassword, input[name="userPassword"]').first();
-  if (!await usernameInput.count() || !await passwordInput.count()) return false;
+  if (!await usernameInput.count() || !await passwordInput.count()) {
+    return { ok: false, message: "教务系统登录页面已变化，没有找到账号或密码输入框。" };
+  }
   const { username, password } = await readStoredCredentials();
-  if (!username || !password) return false;
+  if (!username || !password) {
+    return { ok: false, message: "没有读取到自动登录账号或密码，请重新运行自动登录设置。" };
+  }
 
-  return (await loginWithCredentials(page, username, password)).ok;
+  return loginWithCredentials(page, username, password);
 }
 
 async function loginWithCredentials(page, username, password) {
@@ -253,9 +257,10 @@ async function syncGrades() {
   }
 
   let queryFrame = await findFrame(page, "cjcx_query", 3500);
+  let loginResult;
   if (!queryFrame || await looksLoggedOut(page)) {
-    const loggedIn = await tryAutomaticLogin(page);
-    if (loggedIn) {
+    loginResult = await tryAutomaticLogin(page);
+    if (loginResult.ok) {
       await page.goto(GRADE_URL, { waitUntil: "domcontentloaded", timeout: 20000 });
       queryFrame = await findFrame(page, "cjcx_query", 8000);
     }
@@ -263,7 +268,10 @@ async function syncGrades() {
   if (!queryFrame || await looksLoggedOut(page)) {
     if (page.url() === "about:blank") await page.goto(MAIN_URL, { waitUntil: "domcontentloaded" }).catch(() => {});
     await page.bringToFront();
-    return { status: "login_required", message: "尚未设置自动登录，或账号信息已失效。请运行当前系统的“自动登录设置”，也可以在已打开的窗口手动登录。" };
+    return {
+      status: "login_required",
+      message: loginResult?.message || "自动登录未完成，请重新运行当前系统的自动登录设置。",
+    };
   }
 
   return readAllGrades(page, queryFrame);
