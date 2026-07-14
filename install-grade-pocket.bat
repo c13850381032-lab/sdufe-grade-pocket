@@ -1,31 +1,54 @@
 @echo off
-chcp 65001 >nul
+setlocal
 cd /d "%~dp0"
+title Grade Pocket Installer
 
-where node >nul 2>nul
+where node.exe >nul 2>nul
 if errorlevel 1 (
-  echo 未检测到 Node.js，请先安装 Node.js 22.13 或更高版本。
-  echo https://nodejs.org/
+  echo Node.js was not found.
+  echo Install Node.js 22.13 or newer from https://nodejs.org/
+  echo Then close this window and run this installer again.
   pause
   exit /b 1
 )
 
-echo 正在安装成绩袋，请保持网络连接……
-call npm install
-if errorlevel 1 goto :failed
-call npx playwright install webkit
-if errorlevel 1 goto :failed
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%~dp0create-desktop-shortcut-windows.ps1"
-if errorlevel 1 goto :failed
+echo [1/3] Installing project dependencies...
+call npm.cmd install --no-audit --no-fund
+if errorlevel 1 goto :install_failed
 
 echo.
-echo 安装完成。桌面上已经创建“成绩袋”快捷方式，以后双击它即可运行。
-echo 如需后台自动登录，请再双击 setup-auto-login.bat。
+echo [2/3] Installing the Playwright WebKit browser...
+call "%~dp0node_modules\.bin\playwright.cmd" install webkit
+if errorlevel 1 goto :browser_failed
+
+echo.
+echo [3/3] Creating the desktop shortcut...
+powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%~dp0create-desktop-shortcut-windows.ps1"
+if errorlevel 1 goto :shortcut_failed
+
+echo.
+echo Installation completed successfully.
+echo Use the Grade Pocket shortcut on the desktop to start the app.
+echo Run setup-auto-login.bat once if automatic login is needed.
 pause
 exit /b 0
 
-:failed
+:shortcut_failed
 echo.
-echo 安装失败，请检查网络后重新运行。
+echo Dependencies and WebKit were installed successfully.
+echo The desktop shortcut could not be created, but the app is still installed.
+echo Run start-grade-pocket.bat to start the app.
+pause
+exit /b 0
+
+:browser_failed
+echo.
+echo WebKit installation failed. Check the network connection and try again.
+pause
+exit /b 1
+
+:install_failed
+echo.
+echo Dependency installation failed. Check the network connection and Node.js version.
 pause
 exit /b 1

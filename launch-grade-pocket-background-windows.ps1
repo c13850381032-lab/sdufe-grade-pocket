@@ -2,32 +2,45 @@ $ErrorActionPreference = "Stop"
 $projectDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $runtimeDir = Join-Path $projectDir ".runtime"
 
-if (-not (Test-Path (Join-Path $projectDir "node_modules"))) {
+function Show-GradePocketError([string]$Message) {
     Add-Type -AssemblyName PresentationFramework
     [System.Windows.MessageBox]::Show(
-        "成绩袋尚未安装，请先双击 install-grade-pocket.bat。",
-        "成绩袋启动失败",
+        $Message,
+        "Grade Pocket",
         "OK",
         "Error"
     ) | Out-Null
+}
+
+if (-not (Test-Path (Join-Path $projectDir "node_modules"))) {
+    Show-GradePocketError "Grade Pocket is not installed. Run install-grade-pocket.bat first."
     exit 1
 }
 
 New-Item -ItemType Directory -Force -Path $runtimeDir | Out-Null
-$npm = (Get-Command npm.cmd -ErrorAction Stop).Source
+
+try {
+    $npm = (Get-Command npm.cmd -ErrorAction Stop).Source
+}
+catch {
+    Show-GradePocketError "Node.js was not found. Install Node.js 22.13 or newer."
+    exit 1
+}
 
 function Test-LocalPort([int]$Port) {
     return $null -ne (Get-NetTCPConnection -State Listen -LocalPort $Port -ErrorAction SilentlyContinue | Select-Object -First 1)
 }
 
 function Start-GradePocketProcess([string]$Name, [string]$ScriptName) {
-    Start-Process `
-        -FilePath $npm `
-        -ArgumentList @("run", $ScriptName) `
-        -WorkingDirectory $projectDir `
-        -WindowStyle Hidden `
-        -RedirectStandardOutput (Join-Path $runtimeDir "$Name.out.log") `
-        -RedirectStandardError (Join-Path $runtimeDir "$Name.err.log")
+    $options = @{
+        FilePath = $env:ComSpec
+        ArgumentList = @("/d", "/c", "npm.cmd run $ScriptName")
+        WorkingDirectory = $projectDir
+        WindowStyle = "Hidden"
+        RedirectStandardOutput = Join-Path $runtimeDir "$Name.out.log"
+        RedirectStandardError = Join-Path $runtimeDir "$Name.err.log"
+    }
+    Start-Process @options
 }
 
 if (-not (Test-LocalPort 3100)) {
@@ -46,11 +59,5 @@ for ($attempt = 0; $attempt -lt 30; $attempt++) {
     Start-Sleep -Seconds 1
 }
 
-Add-Type -AssemblyName PresentationFramework
-[System.Windows.MessageBox]::Show(
-    "成绩袋启动超时，请查看项目 .runtime 文件夹中的日志。",
-    "成绩袋启动失败",
-    "OK",
-    "Error"
-) | Out-Null
+Show-GradePocketError "Startup timed out. Check the log files in the project .runtime folder."
 exit 1

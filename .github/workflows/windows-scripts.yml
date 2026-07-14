@@ -1,0 +1,64 @@
+name: Validate Windows scripts
+
+on:
+  push:
+    paths:
+      - "**/*.bat"
+      - "**/*.ps1"
+      - ".gitattributes"
+      - ".github/workflows/windows-scripts.yml"
+  pull_request:
+    paths:
+      - "**/*.bat"
+      - "**/*.ps1"
+      - ".gitattributes"
+      - ".github/workflows/windows-scripts.yml"
+
+jobs:
+  validate:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check ASCII and CRLF
+        shell: powershell
+        run: |
+          $files = Get-ChildItem -Recurse -File | Where-Object { $_.Extension -in ".bat", ".ps1" }
+          foreach ($file in $files) {
+            $bytes = [System.IO.File]::ReadAllBytes($file.FullName)
+            if ($bytes | Where-Object { $_ -gt 127 }) {
+              throw "$($file.FullName) contains non-ASCII bytes"
+            }
+            for ($index = 0; $index -lt $bytes.Length; $index++) {
+              if ($bytes[$index] -eq 10 -and ($index -eq 0 -or $bytes[$index - 1] -ne 13)) {
+                throw "$($file.FullName) contains a non-CRLF line ending"
+              }
+            }
+          }
+
+      - name: Parse PowerShell scripts
+        shell: powershell
+        run: |
+          $files = Get-ChildItem -Recurse -Filter *.ps1 -File
+          foreach ($file in $files) {
+            $tokens = $null
+            $errors = $null
+            [System.Management.Automation.Language.Parser]::ParseFile(
+              $file.FullName,
+              [ref]$tokens,
+              [ref]$errors
+            ) | Out-Null
+            if ($errors.Count -gt 0) {
+              $errors | ForEach-Object { Write-Error $_ }
+              throw "$($file.FullName) has PowerShell parse errors"
+            }
+          }
+
+      - name: Create desktop shortcut
+        shell: powershell
+        run: |
+          powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File .\create-desktop-shortcut-windows.ps1
+          $desktop = [Environment]::GetFolderPath("Desktop")
+          if (-not (Get-ChildItem $desktop -Filter *.lnk -File)) {
+            throw "The desktop shortcut was not created"
+          }
