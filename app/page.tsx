@@ -63,6 +63,9 @@ const QUALITATIVE_SCORES: Record<string, number> = { 优秀: 95, 良好: 85, 中
 const courseKey = (course: Pick<Course, "semester" | "code" | "name">) => `${course.semester}-${course.code}-${course.name}`;
 const classCourseKey = (course: Pick<ClassCourse, "studentId" | "studentName" | "semester" | "courseCode" | "courseName">) =>
   `${course.studentId || course.studentName}-${course.semester}-${course.courseCode || course.courseName}`;
+const normalizeCourseName = (name: string) => name.normalize("NFKC").replace(/[\s，,。·・:：;；（）()《》<>【】\[\]_-]/g, "").toLowerCase();
+const requiredCourseReferenceKey = (course: { semester: string; name?: string; courseName?: string }) =>
+  `${course.semester.trim()}-${normalizeCourseName(course.name ?? course.courseName ?? "")}`;
 
 function splitCsvRow(row: string): string[] {
   const cells: string[] = [];
@@ -243,16 +246,14 @@ function parseOfficialClassMatrix(rows: string[][], headerRowIndex: number, fall
 function parsePairedClassMatrix(rows: string[][], fallbackSemester: string): ClassCourse[] {
   const headers = rows[0];
   const studentRows = rows.slice(1).filter((cells) => /^\d{6,}$/.test(cells[0]?.trim() || "") && Boolean(cells[1]?.trim()));
-  const coursePairs = [] as Array<{ scoreColumn: number; creditColumn: number; name: string; required: boolean }>;
+  const coursePairs = [] as Array<{ scoreColumn: number; creditColumn: number; name: string }>;
   for (let column = 3; column < headers.length - 1; column += 1) {
     const name = headers[column]?.trim();
     if (!name || headers[column + 1]?.trim() !== "学分") continue;
-    const completed = studentRows.filter((cells) => scoreFrom(cells[column]) !== undefined).length;
     coursePairs.push({
       scoreColumn: column,
       creditColumn: column + 1,
       name,
-      required: studentRows.length > 0 && completed / studentRows.length >= 0.75,
     });
     column += 1;
   }
@@ -274,7 +275,7 @@ function parsePairedClassMatrix(rows: string[][], fallbackSemester: string): Cla
         courseCode: `COL-${course.scoreColumn}`,
         credits,
         score,
-        required: course.required,
+        required: false,
       }];
     });
   });
@@ -311,7 +312,6 @@ function parseClassCsv(text: string, fallbackSemester: string): ClassCourse[] {
     if ((!studentId && studentName === "未填写姓名") || !courseName || score === undefined || !Number.isFinite(credits) || credits <= 0) return [];
     const semester = semesterFrom(cells[indexes.semester], fallbackSemester);
     const courseCode = cells[indexes.courseCode]?.trim() || "";
-    const nature = cells[indexes.required]?.trim() || "";
     const course: ClassCourse = {
       id: `${Date.now()}-${index}`,
       studentId,
@@ -321,7 +321,7 @@ function parseClassCsv(text: string, fallbackSemester: string): ClassCourse[] {
       courseCode,
       credits,
       score,
-      required: /必修|是|true|1/i.test(nature),
+      required: false,
     };
     return [course];
   });
@@ -482,7 +482,15 @@ export default function Home() {
     () => ["全部学期", ...Array.from(new Set(classCourses.map((course) => course.semester))).sort((left, right) => right.localeCompare(left, "zh-CN"))],
     [classCourses],
   );
-  const rankingCourses = classCourses.filter((course) => rankingSemester === "全部学期" || course.semester === rankingSemester);
+  const requiredCourseReferences = useMemo(
+    () => new Set(courses
+      .filter((course) => course.source !== "demo" && course.required)
+      .map(requiredCourseReferenceKey)),
+    [courses],
+  );
+  const rankingCourses = classCourses
+    .filter((course) => rankingSemester === "全部学期" || course.semester === rankingSemester)
+    .map((course) => ({ ...course, required: requiredCourseReferences.has(requiredCourseReferenceKey(course)) }));
   const weightedRanking = buildRanking(rankingCourses, false);
   const requiredRanking = buildRanking(rankingCourses, true);
   const classStudentCount = new Set(classCourses.map((course) => course.studentId || course.studentName)).size;
@@ -533,7 +541,7 @@ export default function Home() {
       [...current, ...imported].forEach((course) => merged.set(classCourseKey(course), course));
       return Array.from(merged.values());
     });
-    setNotice(`已导入 ${files.length - failedFiles.length} 个班级 CSV、${imported.length} 条成绩记录${failedFiles.length ? `；${failedFiles.length} 个文件未识别` : ""}，两个榜单已更新。`);
+    setNotice(`已导入 ${files.length - failedFiles.length} 个班级 CSV、${imported.length} 条成绩记录${failedFiles.length ? `；${failedFiles.length} 个文件未识别` : ""}。${requiredCourseReferences.size ? `必修榜已按本人标注的 ${requiredCourseReferences.size} 门必修课更新。` : "尚未读取到本人的必修课，必修榜暂不计算；请先刷新本人成绩。"}`);
     event.target.value = "";
   }
 
@@ -544,7 +552,7 @@ export default function Home() {
   }
 
   function downloadClassTemplate() {
-    const content = "\uFEFF学号,姓名,学期,课程代码,课程名称,学分,成绩,课程性质\n20260001,张三,2025-2026-1,MATH101,高等数学,4,92,必修\n20260002,李四,2025-2026-1,MATH101,高等数学,4,89,必修\n";
+    const content = "\uFEFF学号,姓名,学期,课程代码,课程名称,学分,成绩\n20260001,张三,2025-2026-1,MATH101,高等数学,4,92\n20260002,李四,2025-2026-1,MATH101,高等数学,4,89\n";
     const url = URL.createObjectURL(new Blob([content], { type: "text/csv;charset=utf-8" }));
     const anchor = document.createElement("a");
     anchor.href = url;
@@ -766,7 +774,7 @@ export default function Home() {
           <div>
             <p className="eyebrow">班级成绩排名</p>
             <h2>两个榜单，一眼看清班级位置</h2>
-            <p className="ranking-copy">可直接导入教务系统的班级成绩 CSV，无需改成通用模板。支持“成绩信息”横向表和“课程成绩 + 学分”成对表，也可一次选择多个学期文件。</p>
+            <p className="ranking-copy">可直接导入教务系统的班级成绩 CSV，无需改成通用模板。必修课以本人查询结果中的“必修”标注为准，再匹配班级中同名、同学期的课程。</p>
           </div>
           <div className="ranking-actions">
             <label className="primary-button file-button">
@@ -798,15 +806,15 @@ export default function Home() {
             <RankingTable rows={weightedRanking} emptyText="导入班级 CSV 后，这里会显示加权成绩排名。" />
           </article>
           <article className="ranking-card required-board">
-            <div className="ranking-card-title"><span>02</span><div><h3>必修成绩榜</h3><p>只统计标记为必修的课程</p></div></div>
-            <RankingTable rows={requiredRanking} emptyText={classCourses.length ? "当前范围内没有识别到必修课程，请检查“课程性质”列。" : "导入班级 CSV 后，这里会显示必修成绩排名。"} />
+            <div className="ranking-card-title"><span>02</span><div><h3>必修成绩榜</h3><p>按本人必修课程匹配</p></div></div>
+            <RankingTable rows={requiredRanking} emptyText={classCourses.length ? "当前没有可计算的必修课程。请先刷新本人成绩，并确认本人课程已标注为必修。" : "导入班级 CSV 后，这里会显示必修成绩排名。"} />
           </article>
         </div>
         <div className="ranking-requirements">
           <strong>导入要求</strong>
-          <span>① 教务系统“成绩信息”横向表：保留原始前三行，课程表头需含学分、学期和课程性质。</span>
+          <span>① 先刷新本人成绩；本人课程中标注为“必修”的课程，才会被纳入班级必修榜。</span>
           <span>② “课程 + 学分”成对表：前三列为学号、姓名、学期，后面每门课程紧跟一列学分。</span>
-          <span>③ 成对表没有课程性质时，成绩覆盖班级 75% 及以上同学的课程自动视为公共必修课。</span>
+          <span>③ 班级 CSV 中的课程性质和选课人数不参与必修认定；系统按课程名称与学期匹配本人必修课。</span>
         </div>
         <p className="ranking-tip">支持 UTF-8 和常见 GBK/GB18030 编码；重复导入同一同学、同一学期、同一课程时，以最新记录为准。所有班级数据只保存在当前设备。</p>
       </section>
