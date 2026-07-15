@@ -136,6 +136,19 @@ function scoreFrom(value: string | undefined): number | undefined {
   return QUALITATIVE_SCORES[rawScore];
 }
 
+function decodeCsvBuffer(buffer: ArrayBuffer): string {
+  const utf8 = new TextDecoder("utf-8").decode(buffer);
+  const hasGradeHeaders = (text: string) => text.includes("学号") && text.includes("姓名") && (text.includes("成绩") || text.includes("课程"));
+  if (!utf8.includes("�") && hasGradeHeaders(utf8)) return utf8;
+  for (const encoding of ["gb18030", "gbk"]) {
+    try {
+      const decoded = new TextDecoder(encoding).decode(buffer);
+      if (hasGradeHeaders(decoded)) return decoded;
+    } catch { /* try the next Windows-compatible encoding */ }
+  }
+  return utf8;
+}
+
 function normalizeSdufeRows(rows: SdufeRow[]): Course[] {
   return rows.map((row, index) => {
     const rawScore = String(row.rawScore ?? "").trim();
@@ -272,7 +285,8 @@ function parseClassCsv(text: string, fallbackSemester: string): ClassCourse[] {
   if (rows.length < 2) return [];
   const officialHeaderRow = rows.findIndex((row) => row[0]?.trim() === "学号" && row[1]?.trim() === "姓名" && row[2]?.trim() === "课程门数");
   if (officialHeaderRow >= 0) return parseOfficialClassMatrix(rows, officialHeaderRow, fallbackSemester);
-  if (rows[0][0]?.trim() === "学号" && rows[0][1]?.trim() === "姓名" && rows[0][2]?.trim() === "学期" && rows[0].includes("学分")) {
+  const hasGenericScoreColumn = headerIndex(rows[0], "成绩", "分数", "总评成绩", "score", "grade") >= 0;
+  if (!hasGenericScoreColumn && rows[0][0]?.trim() === "学号" && rows[0][1]?.trim() === "姓名" && rows[0][2]?.trim() === "学期" && rows[0].includes("学分")) {
     return parsePairedClassMatrix(rows, fallbackSemester);
   }
   const headers = rows[0];
@@ -503,10 +517,7 @@ export default function Home() {
     const failedFiles: string[] = [];
     for (const file of files) {
       const buffer = await file.arrayBuffer();
-      let text = new TextDecoder("utf-8").decode(buffer);
-      if (text.includes("�")) {
-        try { text = new TextDecoder("gb18030").decode(buffer); } catch { /* keep utf-8 result */ }
-      }
+      const text = decodeCsvBuffer(buffer);
       const fallbackSemester = file.name.replace(/\.csv$/i, "").trim();
       const parsed = parseClassCsv(text, fallbackSemester);
       if (parsed.length) imported.push(...parsed);
