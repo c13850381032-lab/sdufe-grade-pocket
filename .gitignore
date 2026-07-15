@@ -39,6 +39,7 @@ next-env.d.ts
 /dist/
 /.wrangler/
 /outputs/
+/output/
 /work/
 /.npm-cache/
 /node_modules.partial/

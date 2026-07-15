@@ -25,6 +25,27 @@ type SdufeRow = {
   attribute: string;
 };
 
+type ClassCourse = {
+  id: string;
+  studentId: string;
+  studentName: string;
+  semester: string;
+  courseName: string;
+  courseCode: string;
+  credits: number;
+  score: number;
+  required: boolean;
+};
+
+type RankingRow = {
+  studentId: string;
+  studentName: string;
+  average: number;
+  credits: number;
+  courseCount: number;
+  rank: number;
+};
+
 const initialCourses: Course[] = [
   { id: 1, name: "高等数学 A（2）", code: "MATH1202", semester: "2025-2026-1", credits: 5, score: 92, required: true, source: "demo" },
   { id: 2, name: "数据结构", code: "CS2103", semester: "2025-2026-1", credits: 4, score: 89, required: true, source: "demo" },
@@ -36,9 +57,84 @@ const initialCourses: Course[] = [
 
 const STORAGE_KEY = "grade-pocket-courses-v1";
 const NEW_RESULTS_KEY = "grade-pocket-new-results-v1";
+const CLASS_COURSES_KEY = "grade-pocket-class-courses-v1";
 const SDUFE_BOOKMARKLET = "javascript:(()=>{const d=[];const w=x=>{d.push(x);x.querySelectorAll('iframe').forEach(f=>{try{f.contentDocument&&w(f.contentDocument)}catch(e){}})};w(document);let t;for(const x of d){for(const q of x.querySelectorAll('table')){const s=q.innerText;if(s.includes('课程名称')&&s.includes('成绩')&&s.includes('学分')){t=q;break}}if(t)break}if(!t){alert('未找到成绩表，请先打开“学籍成绩 → 课程成绩查询”并完成查询。');return}const r=[...t.rows],h=[...r[0].cells].map(c=>c.innerText.trim()),i=n=>h.indexOf(n),a=r.slice(1).map(z=>{const c=[...z.cells].map(v=>v.innerText.trim());return[c[i('课程名称')],c[i('课程编号')],c[i('开课学期')],Number(c[i('学分')]),c[i('成绩')],Number(c[i('绩点')]),c[i('课程性质')],c[i('课程属性')]]}).filter(x=>x[0]),u=btoa(unescape(encodeURIComponent(JSON.stringify(a))));window.open('http://localhost:3000/?sdufe='+encodeURIComponent(u),'_blank')})()";
 const QUALITATIVE_SCORES: Record<string, number> = { 优秀: 95, 良好: 85, 中等: 75, 及格: 65, 合格: 60 };
 const courseKey = (course: Pick<Course, "semester" | "code" | "name">) => `${course.semester}-${course.code}-${course.name}`;
+const classCourseKey = (course: Pick<ClassCourse, "studentId" | "studentName" | "semester" | "courseCode" | "courseName">) =>
+  `${course.studentId || course.studentName}-${course.semester}-${course.courseCode || course.courseName}`;
+
+function splitCsvRow(row: string): string[] {
+  const cells: string[] = [];
+  let current = "";
+  let quoted = false;
+  for (let index = 0; index < row.length; index += 1) {
+    const character = row[index];
+    if (character === '"') {
+      if (quoted && row[index + 1] === '"') {
+        current += '"';
+        index += 1;
+      } else {
+        quoted = !quoted;
+      }
+    } else if (character === "," && !quoted) {
+      cells.push(current.trim());
+      current = "";
+    } else {
+      current += character;
+    }
+  }
+  cells.push(current.trim());
+  return cells;
+}
+
+function csvRows(text: string): string[][] {
+  const rows: string[] = [];
+  let current = "";
+  let quoted = false;
+  const source = text.replace(/^\uFEFF/, "");
+  for (let index = 0; index < source.length; index += 1) {
+    const character = source[index];
+    if (character === '"') {
+      current += character;
+      if (quoted && source[index + 1] === '"') {
+        current += source[index + 1];
+        index += 1;
+      } else {
+        quoted = !quoted;
+      }
+    } else if ((character === "\n" || character === "\r") && !quoted) {
+      if (current.trim()) rows.push(current);
+      current = "";
+      if (character === "\r" && source[index + 1] === "\n") index += 1;
+    } else {
+      current += character;
+    }
+  }
+  if (current.trim()) rows.push(current);
+  return rows.map(splitCsvRow);
+}
+
+function headerIndex(headers: string[], ...names: string[]) {
+  const normalized = headers.map((header) => header.replace(/[\s_（）()]/g, "").toLowerCase());
+  return normalized.findIndex((header) => names.some((name) => header === name.replace(/[\s_（）()]/g, "").toLowerCase()));
+}
+
+function semesterFrom(value: string | undefined, fallback: string): string {
+  return value?.match(/\d{4}-\d{4}-[12]/)?.[0]
+    || fallback.match(/\d{4}-\d{4}-[12]/)?.[0]
+    || value?.trim()
+    || fallback
+    || "未分类学期";
+}
+
+function scoreFrom(value: string | undefined): number | undefined {
+  const rawScore = value?.trim() || "";
+  if (!rawScore) return undefined;
+  const numericScore = Number(rawScore);
+  if (Number.isFinite(numericScore)) return numericScore;
+  return QUALITATIVE_SCORES[rawScore];
+}
 
 function normalizeSdufeRows(rows: SdufeRow[]): Course[] {
   return rows.map((row, index) => {
@@ -65,9 +161,9 @@ function normalizeSdufeRows(rows: SdufeRow[]): Course[] {
 }
 
 function parseCsv(text: string): Course[] {
-  const rows = text.replace(/^\uFEFF/, "").split(/\r?\n/).filter(Boolean);
+  const rows = csvRows(text);
   if (rows.length < 2) return [];
-  const headers = rows[0].split(",").map((item) => item.trim());
+  const headers = rows[0];
   const find = (...names: string[]) => headers.findIndex((header) => names.includes(header));
   const indexes = {
     name: find("课程名称", "课程", "name"),
@@ -78,8 +174,8 @@ function parseCsv(text: string): Course[] {
     required: find("课程性质", "是否必修", "required"),
   };
 
-  return rows.slice(1).map((row, index) => {
-    const cells = row.split(",").map((item) => item.trim());
+  if (indexes.name < 0 || indexes.score < 0) return [];
+  return rows.slice(1).map((cells, index) => {
     const nature = cells[indexes.required] ?? "";
     return {
       id: Date.now() + index,
@@ -92,6 +188,182 @@ function parseCsv(text: string): Course[] {
       source: "manual",
     };
   });
+}
+
+function parseOfficialClassMatrix(rows: string[][], headerRowIndex: number, fallbackSemester: string): ClassCourse[] {
+  const headers = rows[headerRowIndex];
+  const summaryStart = headers.findIndex((header) => header.trim() === "不及格门数");
+  const courseEnd = summaryStart > 3 ? summaryStart : headers.length;
+  const courses = headers.slice(3, courseEnd).map((header, offset) => {
+    const credits = Number(header.match(/学分\s*([\d.]+)/)?.[1]);
+    return {
+      column: offset + 3,
+      name: header.split("，")[0]?.trim() || "",
+      credits,
+      required: /(?:^|，)必修(?:，|$)/.test(header),
+      semester: semesterFrom(header, fallbackSemester),
+    };
+  }).filter((course) => course.name && Number.isFinite(course.credits) && course.credits > 0);
+
+  return rows.slice(headerRowIndex + 1).flatMap((cells, rowIndex) => {
+    const studentId = cells[0]?.trim() || "";
+    const studentName = cells[1]?.trim() || "";
+    if (!/^\d{6,}$/.test(studentId) || !studentName) return [];
+    return courses.flatMap((course) => {
+      const score = scoreFrom(cells[course.column]);
+      if (score === undefined) return [];
+      return [{
+        id: `${studentId || studentName}-${course.semester}-${course.column}-${rowIndex}`,
+        studentId,
+        studentName: studentName || "未填写姓名",
+        semester: course.semester,
+        courseName: course.name,
+        courseCode: `COL-${course.column}`,
+        credits: course.credits,
+        score,
+        required: course.required,
+      }];
+    });
+  });
+}
+
+function parsePairedClassMatrix(rows: string[][], fallbackSemester: string): ClassCourse[] {
+  const headers = rows[0];
+  const studentRows = rows.slice(1).filter((cells) => /^\d{6,}$/.test(cells[0]?.trim() || "") && Boolean(cells[1]?.trim()));
+  const coursePairs = [] as Array<{ scoreColumn: number; creditColumn: number; name: string; required: boolean }>;
+  for (let column = 3; column < headers.length - 1; column += 1) {
+    const name = headers[column]?.trim();
+    if (!name || headers[column + 1]?.trim() !== "学分") continue;
+    const completed = studentRows.filter((cells) => scoreFrom(cells[column]) !== undefined).length;
+    coursePairs.push({
+      scoreColumn: column,
+      creditColumn: column + 1,
+      name,
+      required: studentRows.length > 0 && completed / studentRows.length >= 0.75,
+    });
+    column += 1;
+  }
+
+  return studentRows.flatMap((cells, rowIndex) => {
+    const studentId = cells[0]?.trim() || "";
+    const studentName = cells[1]?.trim() || "未填写姓名";
+    const semester = semesterFrom(cells[2], fallbackSemester);
+    return coursePairs.flatMap((course) => {
+      const score = scoreFrom(cells[course.scoreColumn]);
+      const credits = Number(cells[course.creditColumn]);
+      if (score === undefined || !Number.isFinite(credits) || credits <= 0) return [];
+      return [{
+        id: `${studentId || studentName}-${semester}-${course.scoreColumn}-${rowIndex}`,
+        studentId,
+        studentName,
+        semester,
+        courseName: course.name,
+        courseCode: `COL-${course.scoreColumn}`,
+        credits,
+        score,
+        required: course.required,
+      }];
+    });
+  });
+}
+
+function parseClassCsv(text: string, fallbackSemester: string): ClassCourse[] {
+  const rows = csvRows(text);
+  if (rows.length < 2) return [];
+  const officialHeaderRow = rows.findIndex((row) => row[0]?.trim() === "学号" && row[1]?.trim() === "姓名" && row[2]?.trim() === "课程门数");
+  if (officialHeaderRow >= 0) return parseOfficialClassMatrix(rows, officialHeaderRow, fallbackSemester);
+  if (rows[0][0]?.trim() === "学号" && rows[0][1]?.trim() === "姓名" && rows[0][2]?.trim() === "学期" && rows[0].includes("学分")) {
+    return parsePairedClassMatrix(rows, fallbackSemester);
+  }
+  const headers = rows[0];
+  const indexes = {
+    studentId: headerIndex(headers, "学号", "学生学号", "studentid", "id"),
+    studentName: headerIndex(headers, "姓名", "学生姓名", "同学姓名", "name", "studentname"),
+    semester: headerIndex(headers, "学期", "开课学期", "semester", "term"),
+    courseName: headerIndex(headers, "课程名称", "课程", "科目", "coursename", "course"),
+    courseCode: headerIndex(headers, "课程代码", "课程编号", "代码", "coursecode", "code"),
+    credits: headerIndex(headers, "学分", "课程学分", "credits", "credit"),
+    score: headerIndex(headers, "成绩", "分数", "总评成绩", "score", "grade"),
+    required: headerIndex(headers, "课程性质", "课程属性", "是否必修", "性质", "required", "type"),
+  };
+  if ((indexes.studentId < 0 && indexes.studentName < 0) || indexes.courseName < 0 || indexes.score < 0 || indexes.credits < 0) return [];
+
+  return rows.slice(1).flatMap((cells, index) => {
+    const studentName = cells[indexes.studentName]?.trim() || "未填写姓名";
+    const studentId = cells[indexes.studentId]?.trim() || "";
+    const courseName = cells[indexes.courseName]?.trim() || "";
+    const score = scoreFrom(cells[indexes.score]);
+    const credits = Number(cells[indexes.credits]);
+    if ((!studentId && studentName === "未填写姓名") || !courseName || score === undefined || !Number.isFinite(credits) || credits <= 0) return [];
+    const semester = semesterFrom(cells[indexes.semester], fallbackSemester);
+    const courseCode = cells[indexes.courseCode]?.trim() || "";
+    const nature = cells[indexes.required]?.trim() || "";
+    const course: ClassCourse = {
+      id: `${Date.now()}-${index}`,
+      studentId,
+      studentName,
+      semester,
+      courseName,
+      courseCode,
+      credits,
+      score,
+      required: /必修|是|true|1/i.test(nature),
+    };
+    return [course];
+  });
+}
+
+function buildRanking(courses: ClassCourse[], requiredOnly: boolean): RankingRow[] {
+  const students = new Map<string, Omit<RankingRow, "average" | "rank"> & { weightedTotal: number }>();
+  courses.filter((course) => !requiredOnly || course.required).forEach((course) => {
+    const key = course.studentId || course.studentName;
+    const current = students.get(key) || {
+      studentId: course.studentId,
+      studentName: course.studentName,
+      credits: 0,
+      courseCount: 0,
+      weightedTotal: 0,
+    };
+    current.credits += course.credits;
+    current.courseCount += 1;
+    current.weightedTotal += course.score * course.credits;
+    students.set(key, current);
+  });
+  const sorted = Array.from(students.values())
+    .filter((student) => student.credits > 0)
+    .map((student) => ({ ...student, average: student.weightedTotal / student.credits }))
+    .sort((left, right) => right.average - left.average || left.studentId.localeCompare(right.studentId, "zh-CN"));
+  let previousAverage = Number.NaN;
+  let previousRank = 0;
+  return sorted.map((student, index) => {
+    const rank = Math.abs(student.average - previousAverage) < 0.000001 ? previousRank : index + 1;
+    previousAverage = student.average;
+    previousRank = rank;
+    return {
+      studentId: student.studentId,
+      studentName: student.studentName,
+      average: student.average,
+      credits: student.credits,
+      courseCount: student.courseCount,
+      rank,
+    };
+  });
+}
+
+function RankingTable({ rows, emptyText }: { rows: RankingRow[]; emptyText: string }) {
+  if (!rows.length) return <div className="ranking-empty">{emptyText}</div>;
+  return (
+    <div className="ranking-list" role="list">
+      {rows.map((student) => (
+        <div className={`ranking-row${student.rank <= 3 ? ` top-${student.rank}` : ""}`} role="listitem" key={student.studentId || student.studentName}>
+          <span className="rank-number">{student.rank <= 3 ? ["🥇", "🥈", "🥉"][student.rank - 1] : student.rank}</span>
+          <span className="rank-student"><strong>{student.studentName}</strong><small>{student.studentId || "未填写学号"}</small></span>
+          <span className="rank-detail">{student.courseCount} 门 · {student.credits.toFixed(1)} 学分</span>
+          <strong className="rank-score">{student.average.toFixed(2)}</strong>
+        </div>
+      ))}
+    </div>
+  );
 }
 
 export default function Home() {
@@ -111,7 +383,11 @@ export default function Home() {
   const [guestPassword, setGuestPassword] = useState("");
   const [showGuestPassword, setShowGuestPassword] = useState(false);
   const [guestError, setGuestError] = useState("");
+  const [classCourses, setClassCourses] = useState<ClassCourse[]>([]);
+  const [rankingSemester, setRankingSemester] = useState("全部学期");
 
+  /* Loading browser-only saved data is intentionally performed once after hydration. */
+  /* eslint-disable react-hooks/set-state-in-effect */
   useEffect(() => {
     const saved = window.localStorage.getItem(STORAGE_KEY);
     let savedCourses: Course[] = initialCourses;
@@ -121,6 +397,10 @@ export default function Home() {
     const savedNewResults = window.localStorage.getItem(NEW_RESULTS_KEY);
     if (savedNewResults) {
       try { setNewCourses(JSON.parse(savedNewResults)); } catch { /* ignore invalid history */ }
+    }
+    const savedClassCourses = window.localStorage.getItem(CLASS_COURSES_KEY);
+    if (savedClassCourses) {
+      try { setClassCourses(JSON.parse(savedClassCourses)); } catch { /* ignore invalid class data */ }
     }
     const payload = new URLSearchParams(window.location.search).get("sdufe");
     if (!payload) {
@@ -146,6 +426,7 @@ export default function Home() {
       setNotice("同步数据未能识别，请回到教务系统成绩页重新点击同步书签。");
     }
   }, []);
+  /* eslint-enable react-hooks/set-state-in-effect */
 
   useEffect(() => {
     if (viewMode === "owner") window.localStorage.setItem(STORAGE_KEY, JSON.stringify(courses));
@@ -154,6 +435,10 @@ export default function Home() {
   useEffect(() => {
     window.localStorage.setItem(NEW_RESULTS_KEY, JSON.stringify(newCourses));
   }, [newCourses]);
+
+  useEffect(() => {
+    window.localStorage.setItem(CLASS_COURSES_KEY, JSON.stringify(classCourses));
+  }, [classCourses]);
 
   const semesters = useMemo(
     () => ["全部学期", ...Array.from(new Set(courses.map((course) => course.semester)))],
@@ -179,6 +464,14 @@ export default function Home() {
   const filteredCourses = courses.filter((course) =>
     (semester === "全部学期" || course.semester === semester) && (!onlyRequired || course.required),
   ).sort((left, right) => right.semester.localeCompare(left.semester) || right.id - left.id);
+  const rankingSemesters = useMemo(
+    () => ["全部学期", ...Array.from(new Set(classCourses.map((course) => course.semester))).sort((left, right) => right.localeCompare(left, "zh-CN"))],
+    [classCourses],
+  );
+  const rankingCourses = classCourses.filter((course) => rankingSemester === "全部学期" || course.semester === rankingSemester);
+  const weightedRanking = buildRanking(rankingCourses, false);
+  const requiredRanking = buildRanking(rankingCourses, true);
+  const classStudentCount = new Set(classCourses.map((course) => course.studentId || course.studentName)).size;
 
   function updateCourse(id: number, patch: Partial<Course>) {
     setCourses((current) => current.map((course) => course.id === id ? { ...course, ...patch } : course));
@@ -201,6 +494,52 @@ export default function Home() {
     setCourses(imported);
     setNotice(`已导入 ${imported.length} 门课程，均分已重新计算。`);
     event.target.value = "";
+  }
+
+  async function importClassCsv(event: ChangeEvent<HTMLInputElement>) {
+    const files = Array.from(event.target.files || []);
+    if (!files.length) return;
+    const imported: ClassCourse[] = [];
+    const failedFiles: string[] = [];
+    for (const file of files) {
+      const buffer = await file.arrayBuffer();
+      let text = new TextDecoder("utf-8").decode(buffer);
+      if (text.includes("�")) {
+        try { text = new TextDecoder("gb18030").decode(buffer); } catch { /* keep utf-8 result */ }
+      }
+      const fallbackSemester = file.name.replace(/\.csv$/i, "").trim();
+      const parsed = parseClassCsv(text, fallbackSemester);
+      if (parsed.length) imported.push(...parsed);
+      else failedFiles.push(file.name);
+    }
+    if (!imported.length) {
+      setNotice("没有识别到班级成绩。请使用教务系统导出的“成绩信息”横向表、“课程+学分”成对表，或通用明细表。");
+      event.target.value = "";
+      return;
+    }
+    setClassCourses((current) => {
+      const merged = new Map<string, ClassCourse>();
+      [...current, ...imported].forEach((course) => merged.set(classCourseKey(course), course));
+      return Array.from(merged.values());
+    });
+    setNotice(`已导入 ${files.length - failedFiles.length} 个班级 CSV、${imported.length} 条成绩记录${failedFiles.length ? `；${failedFiles.length} 个文件未识别` : ""}，两个榜单已更新。`);
+    event.target.value = "";
+  }
+
+  function clearClassRanking() {
+    setClassCourses([]);
+    setRankingSemester("全部学期");
+    setNotice("班级榜单数据已清空，不影响你的个人成绩。");
+  }
+
+  function downloadClassTemplate() {
+    const content = "\uFEFF学号,姓名,学期,课程代码,课程名称,学分,成绩,课程性质\n20260001,张三,2025-2026-1,MATH101,高等数学,4,92,必修\n20260002,李四,2025-2026-1,MATH101,高等数学,4,89,必修\n";
+    const url = URL.createObjectURL(new Blob([content], { type: "text/csv;charset=utf-8" }));
+    const anchor = document.createElement("a");
+    anchor.href = url;
+    anchor.download = "班级成绩导入模板.csv";
+    anchor.click();
+    URL.revokeObjectURL(url);
   }
 
   async function refreshGrades() {
@@ -332,6 +671,7 @@ export default function Home() {
         </a>
         <nav className="nav-links" aria-label="主要导航">
           <a className="active" href="#overview">成绩概览</a>
+          <a href="#ranking">班级排名</a>
           <a href="#courses">课程明细</a>
           <a href="#how">计算说明</a>
         </nav>
@@ -408,6 +748,56 @@ export default function Home() {
           <p className="card-note">每门课程权重相同</p>
           <div className="mini-breakdown"><span>必修课简单平均</span><strong>{arithmeticAverage.toFixed(2)}</strong></div>
         </article>
+      </section>
+
+      <section className="ranking-section" id="ranking">
+        <div className="ranking-heading">
+          <div>
+            <p className="eyebrow">班级成绩排名</p>
+            <h2>两个榜单，一眼看清班级位置</h2>
+            <p className="ranking-copy">可直接导入教务系统的班级成绩 CSV，无需改成通用模板。支持“成绩信息”横向表和“课程成绩 + 学分”成对表，也可一次选择多个学期文件。</p>
+          </div>
+          <div className="ranking-actions">
+            <label className="primary-button file-button">
+              ＋ 导入班级 CSV
+              <input type="file" accept=".csv,text/csv" multiple onChange={importClassCsv} />
+            </label>
+            <button className="secondary-button" type="button" onClick={downloadClassTemplate}>下载通用模板</button>
+          </div>
+        </div>
+
+        <div className="ranking-toolbar">
+          <div className="ranking-summary">
+            <strong>{classStudentCount}</strong><span>名同学</span>
+            <strong>{classCourses.length}</strong><span>条成绩</span>
+          </div>
+          <div className="ranking-filters">
+            <label>排名范围
+              <select value={rankingSemester} onChange={(event) => setRankingSemester(event.target.value)}>
+                {rankingSemesters.map((item) => <option key={item}>{item}</option>)}
+              </select>
+            </label>
+            {classCourses.length > 0 && <button type="button" onClick={clearClassRanking}>清空榜单数据</button>}
+          </div>
+        </div>
+
+        <div className="ranking-grid">
+          <article className="ranking-card weighted-board">
+            <div className="ranking-card-title"><span>01</span><div><h3>加权成绩榜</h3><p>全部课程按学分加权</p></div></div>
+            <RankingTable rows={weightedRanking} emptyText="导入班级 CSV 后，这里会显示加权成绩排名。" />
+          </article>
+          <article className="ranking-card required-board">
+            <div className="ranking-card-title"><span>02</span><div><h3>必修成绩榜</h3><p>只统计标记为必修的课程</p></div></div>
+            <RankingTable rows={requiredRanking} emptyText={classCourses.length ? "当前范围内没有识别到必修课程，请检查“课程性质”列。" : "导入班级 CSV 后，这里会显示必修成绩排名。"} />
+          </article>
+        </div>
+        <div className="ranking-requirements">
+          <strong>导入要求</strong>
+          <span>① 教务系统“成绩信息”横向表：保留原始前三行，课程表头需含学分、学期和课程性质。</span>
+          <span>② “课程 + 学分”成对表：前三列为学号、姓名、学期，后面每门课程紧跟一列学分。</span>
+          <span>③ 成对表没有课程性质时，成绩覆盖班级 75% 及以上同学的课程自动视为公共必修课。</span>
+        </div>
+        <p className="ranking-tip">支持 UTF-8 和常见 GBK/GB18030 编码；重复导入同一同学、同一学期、同一课程时，以最新记录为准。所有班级数据只保存在当前设备。</p>
       </section>
 
       <section className="course-section" id="courses">
